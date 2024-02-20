@@ -79,98 +79,111 @@ using StatsPlots
 using DeepCompartmentModels
 
 # Fit models
-for model_type in ["naive", "bound", "global", "inn"]
-    Threads.@threads for i in 1:10
-        file = "constraints-paper/data/opticlot_train_with_val_set_$(i)_10_folds.csv"
-        df = DataFrame(CSV.File(file))
-        df[df.Dose .!== 0., :Rate] = df[df.Dose .!== 0., :Dose] .* 60
-        df[df.Dose .!== 0., :Duration] .= 1/60
-        population = load(df, [:Weight, :Height, :Age, :BGO], S1=1/1000)
-        # population = load(df, [:Weight, :Age, :BGO], S1=1/1000)
-        population.x .= collect(normalize_inv(population.x', population.scale_x)')
-        # population = load(df, [:Weight, :Height, :Age, :BGO, :APTT, :PT, :Albumine], S1=1/1000)
+for num_neurons in [8, 32, 128]
+    for model_type in ["naive", "bound", "global", "inn"]
+        Threads.@threads for i in 1:10
+            ckpt_file = "constraints-paper/checkpoints/comparison/final_manuscript/$(model_type)/$(model_type)_fold_$(i)_10_folds_neurons_$num_neurons.bson"
+            file = "constraints-paper/data/opticlot_train_with_val_set_$(i)_10_folds.csv"
+            df = DataFrame(CSV.File(file))
+            df[df.Dose .!== 0., :Rate] = df[df.Dose .!== 0., :Dose] .* 60
+            df[df.Dose .!== 0., :Duration] .= 1/60
+            population = load(df, [:Weight, :Height, :Age, :BGO], S1=1/1000)
+            # population = load(df, [:Weight, :Age, :BGO], S1=1/1000)
+            population.x .= collect(normalize_inv(population.x', population.scale_x)')
+            # population = load(df, [:Weight, :Height, :Age, :BGO, :APTT, :PT, :Albumine], S1=1/1000)
 
-        file_val = "constraints-paper/data/opticlot_val_$(i)_10_folds.csv"
-        df_val = DataFrame(CSV.File(file_val))
-        df_val[df_val.Dose .!== 0., :Rate] = df_val[df_val.Dose .!== 0., :Dose] .* 60
-        df_val[df_val.Dose .!== 0., :Duration] .= 1/60
-        population_val = load(df_val, [:Weight, :Height, :Age, :BGO], S1=1/1000)
-        # population_val = load(df_val, [:Weight, :Age, :BGO], S1=1/1000)
-        population_val.x .= collect(normalize_inv(population_val.x', population_val.scale_x)')
-        
-        df_test = DataFrame(CSV.File(replace(file_val, "_val" => "_test")))
-        df_test[df_test.Dose .!== 0., :Rate] = df_test[df_test.Dose .!== 0., :Dose] .* 60
-        df_test[df_test.Dose .!== 0., :Duration] .= 1/60
-        test_population = load(df_test, [:Weight, :Height, :Age, :BGO], S1=1/1000)
-        # test_population = load(df_test, [:Weight, :Age, :BGO], S1=1/1000)
-        # test_population = load(df_test, [:Weight, :Height, :Age, :BGO, :APTT, :PT, :Albumine], S1=1/1000)
-        test_population.x .= collect(normalize_inv(test_population.x', test_population.scale_x)')
-
-        if model_type == "naive"
-            ann = Flux.Chain(
-                x -> x ./ [150.f0, 210.f0, 100.f0, 1.f0],
-                Flux.Dense(4, 32, Flux.swish),
-                Flux.Dense(32, 4, Flux.softplus),
-            )
-        elseif model_type == "bound"
-            ann = Flux.Chain(
-                x -> x ./ [150.f0, 210.f0, 100.f0, 1.f0],
-                Flux.Dense(4, 32, Flux.swish),
-                Flux.Dense(32, 4),
-                NormalConstraint([0.0, 0.3, 0.05, 0.], [0.5, 7., 0.5, 2.])
-            )
-        elseif model_type == "global"
-            ann = Flux.Chain(
-                x -> x ./ [150.f0, 210.f0, 100.f0, 1.f0],
-                Flux.Dense(4, 32, Flux.swish),
-                Flux.Dense(32, 2),
-                AddFixedParameters([3, 4], 4, Flux.softplus)
-            )
-        elseif model_type == "inn"
-            neurons_ = 16
-            # nn_wt = Flux.Chain(Flux.Dense(1, neurons_, Flux.swish), Flux.Parallel(vcat, Flux.Dense(neurons_, 1, Flux.softplus), Flux.Dense(neurons_, 1, Flux.softplus; bias=[0.5])))
-            nn_wtht = Flux.Chain(Flux.Dense(2, neurons_, Flux.swish), Flux.Parallel(vcat, Flux.Dense(neurons_, 1, Flux.softplus), Flux.Dense(neurons_, 1, Flux.softplus; bias=[0.5])))
-            nn_bgo = Flux.Chain(Flux.Dense(1, 1, Flux.softplus; bias=[0.5]))
-            nn_age = Flux.Chain(Flux.Dense(1, neurons_, Flux.swish), Flux.Dense(neurons_, 1, Flux.softplus; bias=[0.5]))
+            file_val = "constraints-paper/data/opticlot_val_$(i)_10_folds.csv"
+            df_val = DataFrame(CSV.File(file_val))
+            df_val[df_val.Dose .!== 0., :Rate] = df_val[df_val.Dose .!== 0., :Dose] .* 60
+            df_val[df_val.Dose .!== 0., :Duration] .= 1/60
+            population_val = load(df_val, [:Weight, :Height, :Age, :BGO], S1=1/1000)
+            # population_val = load(df_val, [:Weight, :Age, :BGO], S1=1/1000)
+            population_val.x .= collect(normalize_inv(population_val.x', population_val.scale_x)')
             
-            ann = Flux.Chain(
-                x -> x ./ [150.f0, 210.f0, 100.f0, 1.f0],
-                Split([1,2], [3], [4]),
-                Flux.Parallel(Join(2, 1 => [1, 2], 2 => [1], 3 => [1]), nn_wtht, nn_age, nn_bgo), # note: not having age affect v1
-                # x -> x ./ [150.f0, 100.f0, 1.f0],
-                # Split(),
-                # Flux.Parallel(Join(2, 1 => [1, 2], 2 => [1], 3 => [1]), nn_wt, nn_age, nn_bgo), # note: not having age affect v1
-                Concatenate([3, 4], 4, Flux.softplus),
-                # Concatenate([3], 3, (x) -> Flux.sigmoid(x) * 0.4),
-                # Concatenate([4], 4, (x) -> Flux.sigmoid(x) * 1.0),
-            )
-        end
+            df_test = DataFrame(CSV.File(replace(file_val, "_val" => "_test")))
+            df_test[df_test.Dose .!== 0., :Rate] = df_test[df_test.Dose .!== 0., :Dose] .* 60
+            df_test[df_test.Dose .!== 0., :Duration] .= 1/60
+            test_population = load(df_test, [:Weight, :Height, :Age, :BGO], S1=1/1000)
+            # test_population = load(df_test, [:Weight, :Age, :BGO], S1=1/1000)
+            # test_population = load(df_test, [:Weight, :Height, :Age, :BGO, :APTT, :PT, :Albumine], S1=1/1000)
+            test_population.x .= collect(normalize_inv(test_population.x', test_population.scale_x)')
 
-        model = DCM(two_comp!, ann, 2)
-        opt = Flux.ADAM(3e-3)
-
-        p_opt = copy(model.weights)
-        best_val_loss = mse(model, population_val)
-        for epoch in 1:4000
-            idxs = unique(rand(1:length(population), 35))
-            ∇ = first(Zygote.gradient(p -> mse(model, population[idxs], p), model.weights))
-            if epoch > 200 && mse(model, population_val) < best_val_loss
-                p_opt = copy(model.weights)
-                best_val_loss = mse(model, population_val)
-                println("[SET $(i)] Epoch $epoch SAVED. VAL RMSE = $(sqrt(best_val_loss))")
+            if model_type == "naive"
+                ann = Flux.Chain(
+                    x -> x ./ [150.f0, 210.f0, 100.f0, 1.f0],
+                    Flux.Dense(4, num_neurons, Flux.swish),
+                    Flux.Dense(num_neurons, 4, Flux.softplus),
+                )
+            elseif model_type == "bound"
+                ann = Flux.Chain(
+                    x -> x ./ [150.f0, 210.f0, 100.f0, 1.f0],
+                    Flux.Dense(4, num_neurons, Flux.swish),
+                    Flux.Dense(num_neurons, 4),
+                    NormalConstraint([0.0, 0.3, 0.05, 0.], [0.5, 7., 0.5, 2.])
+                )
+            elseif model_type == "global"
+                ann = Flux.Chain(
+                    x -> x ./ [150.f0, 210.f0, 100.f0, 1.f0],
+                    Flux.Dense(4, num_neurons, Flux.swish),
+                    Flux.Dense(num_neurons, 2),
+                    AddFixedParameters([3, 4], 4, Flux.softplus)
+                )
+            elseif model_type == "inn"
+                num_neur = Integer(num_neurons / 2)
+                nn_wtht = Flux.Chain(
+                    Flux.Dense(2, num_neur, Flux.swish), 
+                    Flux.Parallel(vcat, 
+                    Flux.Dense(num_neur, 1, Flux.softplus), 
+                    Flux.Dense(num_neur, 1, Flux.softplus; bias=[0.5])
+                    )
+                )
+                nn_bgo = Flux.Chain(
+                    Flux.Dense(1, 1, Flux.softplus; bias=false)
+                )
+                nn_age = Flux.Chain(
+                    Flux.Dense(1, num_neur, Flux.swish), 
+                    Flux.Dense(num_neur, 1, Flux.softplus; bias=[0.5])
+                )
+                
+                ann = Flux.Chain(
+                    x -> x ./ [150.f0, 210.f0, 100.f0, 1.f0],
+                    Split([1,2], [3], [4]),
+                    Flux.Parallel(Join(2, 1 => [1, 2], 2 => [1], 3 => [1]), nn_wtht, nn_age, nn_bgo), # note: not having age affect v1
+                    # x -> x ./ [150.f0, 100.f0, 1.f0],
+                    # Split(),
+                    # Flux.Parallel(Join(2, 1 => [1, 2], 2 => [1], 3 => [1]), nn_wt, nn_age, nn_bgo), # note: not having age affect v1
+                    Concatenate([3, 4], 4, Flux.softplus),
+                    # Concatenate([3], 3, (x) -> Flux.sigmoid(x) * 0.4),
+                    # Concatenate([4], 4, (x) -> Flux.sigmoid(x) * 1.0),
+                )
             end
-            Flux.update!(opt, model.weights, ∇)
-        end
-        # cb(m, test) = (e, l) -> println("Epoch $(e): RMSE = $(sqrt(l)), test = $(sqrt(mse(m, test)))")
-        # fit!(model, population, opt; epochs=500, callback=cb(model, test_population))
-        # [13.65, 14.76, 14.72, 15.88, 14.05] seconds
 
-        # display(Plots.plot(predict(model, test_population[1]; interpolate=true)))
-        ckpt = Dict(:weights => p_opt, :ann => ann, :val_rmse => sqrt(best_val_loss), :test_rmse => sqrt(mse(model, test_population, p_opt)))
-        filename = "$(model_type)_fold_$(i)_10_folds.bson"
-        BSON.bson(joinpath("constraints-paper/checkpoints/comparison/final_manuscript", filename), ckpt)
-        # BSON.bson("constraints-paper/checkpoints/comparison/naive_fold_$i.bson", Dict(:model => model, :weights => model.weights, :train_rmse => sqrt(mse(model, population)), :test_rmse => sqrt(mse(model, test_population))))
-        # BSON.bson("constraints-paper/checkpoints/comparison/causal_fold_$(i)_new_with_val_set.bson", Dict(:model => model.re(p_opt), :train_rmse => sqrt(mse(model, population, p_opt)), :test_rmse => sqrt(mse(model, test_population, p_opt))))
+            model = DCM(two_comp!, ann, 2)
+            opt = Flux.ADAM(3e-3)
+
+            p_opt = copy(model.weights)
+            best_val_loss = mse(model, population_val)
+            for epoch in 1:4000
+                idxs = unique(rand(1:length(population), 35))
+                ∇ = first(Zygote.gradient(p -> mse(model, population[idxs], p), model.weights))
+                if epoch > 200 && mse(model, population_val) < best_val_loss
+                    p_opt = copy(model.weights)
+                    best_val_loss = mse(model, population_val)
+                    println("[SET $(i)] Epoch $epoch SAVED. VAL RMSE = $(sqrt(best_val_loss))")
+                end
+                Flux.update!(opt, model.weights, ∇)
+            end
+            # cb(m, test) = (e, l) -> println("Epoch $(e): RMSE = $(sqrt(l)), test = $(sqrt(mse(m, test)))")
+            # fit!(model, population, opt; epochs=500, callback=cb(model, test_population))
+            # [13.65, 14.76, 14.72, 15.88, 14.05] seconds
+
+            # display(Plots.plot(predict(model, test_population[1]; interpolate=true)))
+            ckpt = Dict(:weights => p_opt, :ann => ann, :val_rmse => sqrt(best_val_loss), :test_rmse => sqrt(mse(model, test_population, p_opt)))
+            # filename = "$(model_type)_fold_$(i)_10_folds_neurons_$num_neurons.bson"
+            BSON.bson(ckpt_file, ckpt)
+            # BSON.bson("constraints-paper/checkpoints/comparison/naive_fold_$i.bson", Dict(:model => model, :weights => model.weights, :train_rmse => sqrt(mse(model, population)), :test_rmse => sqrt(mse(model, test_population))))
+            # BSON.bson("constraints-paper/checkpoints/comparison/causal_fold_$(i)_new_with_val_set.bson", Dict(:model => model.re(p_opt), :train_rmse => sqrt(mse(model, population, p_opt)), :test_rmse => sqrt(mse(model, test_population, p_opt))))
+        end
     end
 end
 
@@ -287,8 +300,7 @@ population.x .= collect(normalize_inv(population.x', population.scale_x)')
 
 types = ["naive", "bound", "global", "inn"]
 t = 0:(5/60):48.
-solution = zeros(length(types), 10, length(t))
-plt = Plots.plot()
+solution = zeros(length(types) + 1, 10, length(t))
 k = 1
 for (j, type) in enumerate(types)
     for i in 1:10
@@ -299,8 +311,40 @@ for (j, type) in enumerate(types)
         model = DCM(two_comp!, ann, 2)
 
         solution[j, i, :] = predict(model, population[k]; interpolate = true)(t)
-        Plots.plot!(plt, sol)
     end
+end
+
+# N-ODE:
+longer_t = 0:(5/60):72.
+longer_solution = zeros(10, length(longer_t))
+folder = "constraints-paper/checkpoints/comparison/final_manuscript/node"
+files = readdir(folder)
+for (i, file) in enumerate(filter(contains("neurons_32_latentdim_2_hiddendim_1"), files))
+    println("Running for file $i")
+    ckpt = BSON.load(joinpath(folder, file))
+    individual = population[k] 
+    # Decoder and neuralode parameters are swapped in ckpt
+    p = ComponentVector(enc = ckpt[:p_encoder], node = ckpt[:p_decoder], dec = ckpt[:p_neuralode], I = 0.f0)
+    st = (enc = ckpt[:st_encoder], node = ckpt[:st_neuralode], dec = ckpt[:st_decoder])
+     
+    θ, _ = ckpt[:encoder](individual.x, p.enc, st.enc)
+    d = Integer(size(θ, 1) / 2)
+    
+    # 100 Monte Carlo samples:
+    res = zeros(length(t))
+    res2 = zeros(length(longer_t))
+    for _ in 1:100
+        z = softplus.(θ[d+1:end]) .* randn(d) + θ[1:d]
+        z′ = predict_node(ckpt[:neuralode], individual, z, p, st)(t)
+        longer_z′ = predict_node(ckpt[:neuralode], individual, z, p, st)(longer_t)
+        ŷ, _ = ckpt[:decoder](hcat(z′.u...), p.dec, st.dec)
+        longer_ŷ, _ = ckpt[:decoder](hcat(longer_z′.u...), p.dec, st.dec)
+        res += ŷ[1, :]
+        res2 += longer_ŷ[1, :]
+    end
+    
+    solution[end, i, :] = res ./ 100
+    longer_solution[i, :] = res2 ./ 100
 end
 
 plt1 = Plots.plot()
@@ -321,7 +365,20 @@ Plots.plot!(plt3, population[k], markersize=6, label="Observations", legend=fals
 plt4 = Plots.plot()
 Plots.plot!(plt4, t, solution[4, :, :]', color=purple_, alpha=0.6, linewidth=2)
 Plots.plot!(plt4, t, median(solution[4, :, :], dims=1)', color=:black, linewidth=2)
-Plots.plot!(plt4, population[k], markersize=6, label="Observations", legend=false)
+Plots.plot!(plt4, population[k], markersize=6, label="Observations", ylabel="FVIII level (IU/dL)", legend=false)
 
-Plots.plot(plt1, plt2, plt3, plt4, framestyle=:box, layout=(1, 4), size=(1400, 300), xlabel="Time", ylim=(-0.1, 2.2), yticks=(0:0.5:2, string.(0:50:200)), bottommargin=8mm, leftmargin=8mm)
-Plots.savefig("constraints-paper/plots/figure_supplement_realworld_curves.svg")
+plt5 = Plots.plot()
+Plots.plot!(plt5, t, solution[5, :, :]', color=Plots.palette(:default)[7], alpha=0.6, linewidth=2)
+Plots.plot!(plt5, t, median(solution[5, :, :], dims=1)', color=:black, linewidth=2)
+Plots.plot!(plt5, population[k], markersize=6, label="Observations", legend=false)
+
+
+Plots.plot(plt1, plt2, plt3, plt4, plt5, framestyle=:box, layout=(2, 3), size=(800, 500), xlabel="Time", ylim=(-0.1, 2.2), yticks=(0:0.5:2, string.(0:50:200)), bottommargin=8mm, leftmargin=8mm)
+Plots.savefig("constraints-paper/plots/figure_supplement_realworld_curves_new.svg")
+
+
+
+Plots.plot(longer_t, longer_solution', color=Plots.palette(:default)[7], alpha=0.6, linewidth=2, label=["Single replicate" fill(nothing, 1, 9)...])
+Plots.plot!(longer_t, median(longer_solution, dims=1)', color=:black, linewidth=2, label="Median prediction")
+Plots.plot!(population[k], markersize=6, label="Observations", xlabel="Time", ylabel="FVIII level (IU/dL)", framestyle=:box, size=(400, 300))
+Plots.savefig("constraints-paper/plots/figure_supplement_node_extrapolation.svg")
